@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -7,10 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.models.extraction_models import BatchRecordExtraction
 from src.services.display import display_eval, display_pipeline_done, display_pipeline_start
 from src.services.eval_runner import run_eval
-from src.services.field_extractor import extract_fields
+from src.services.field_extractor import aextract_fields
 from src.services.pdf_parser import parse_pdf
-from src.services.procedure_extractor import extract_procedure
-from src.services.section_extractor import extract_sections
+from src.services.procedure_extractor import aextract_procedure
+from src.services.section_extractor import aextract_sections
 from src.services.summary_generator import generate_summary
 from src.utils.file_io import write_json, write_text
 from src.utils.logger import get_logger
@@ -18,11 +19,11 @@ from src.utils.logger import get_logger
 logger = get_logger("main")
 
 
-def process_file(pdf_path: Path, output_dir: Path) -> None:
+async def process_file(pdf_path: Path, output_dir: Path) -> None:
     file_name = pdf_path.stem
     logger.info("Processing file: %s", pdf_path.name)
 
-    # 1. Parse PDF
+    # 1. Parse PDF (sync, fast)
     parsed_doc = parse_pdf(pdf_path)
     write_json(
         output_dir / "parsed" / f"{file_name}.json",
@@ -30,16 +31,24 @@ def process_file(pdf_path: Path, output_dir: Path) -> None:
     )
     logger.info("Parsed PDF: %s", pdf_path.name)
 
-    # 2. Extract sections
-    sections = extract_sections(parsed_doc)
+    # 2. Run sections + procedure in parallel
+    sections_task = asyncio.create_task(aextract_sections(parsed_doc))
+    procedure_task = asyncio.create_task(aextract_procedure(parsed_doc))
+
+    # 3. Wait for sections, then start fields
+    sections = await sections_task
     write_json(
         output_dir / "extracted" / f"{file_name}_sections.json",
         [s.model_dump() for s in sections],
     )
     logger.info("Extracted sections: %d", len(sections))
 
-    # 3. Extract fields
-    extraction = extract_fields(parsed_doc, sections)
+    fields_task = asyncio.create_task(aextract_fields(parsed_doc, sections))
+
+    # 4. Wait for remaining tasks
+    procedure_steps, extraction = await asyncio.gather(procedure_task, fields_task)
+
+    # Write extraction outputs
     write_json(
         output_dir / "extracted" / f"{file_name}_fields.json",
         {
@@ -50,8 +59,13 @@ def process_file(pdf_path: Path, output_dir: Path) -> None:
     )
     logger.info("Extracted fields")
 
-    # 4. Extract procedure
-    procedure_steps = extract_procedure(parsed_doc)
+    write_json(
+        output_dir / "extracted" / f"{file_name}_procedure.json",
+        [s.model_dump() for s in procedure_steps],
+    )
+    logger.info("Extracted procedure steps: %d", len(procedure_steps))
+
+    # 5. Merge and finalize
     extraction = BatchRecordExtraction(
         metadata=extraction.metadata,
         sections=sections,
@@ -59,13 +73,8 @@ def process_file(pdf_path: Path, output_dir: Path) -> None:
         equipment=extraction.equipment,
         procedure_steps=procedure_steps,
     )
-    write_json(
-        output_dir / "extracted" / f"{file_name}_procedure.json",
-        [s.model_dump() for s in procedure_steps],
-    )
-    logger.info("Extracted procedure steps: %d", len(procedure_steps))
 
-    # 5. Run eval
+    # 6. Run eval
     eval_result = run_eval(parsed_doc, extraction, sections)
     write_json(
         output_dir / "findings" / f"{file_name}_findings.json",
@@ -73,10 +82,10 @@ def process_file(pdf_path: Path, output_dir: Path) -> None:
     )
     logger.info("Ran findings checks: %d findings", len(eval_result.findings))
 
-    # 6. Display eval results
+    # 7. Display eval results
     display_eval(extraction, eval_result, sections)
 
-    # 7. Generate summary
+    # 8. Generate summary
     summary = generate_summary(extraction, eval_result, sections)
     write_text(
         output_dir / "summaries" / f"{file_name}_summary.md",
@@ -85,7 +94,7 @@ def process_file(pdf_path: Path, output_dir: Path) -> None:
     logger.info("Wrote summary")
 
 
-def main() -> None:
+async def run() -> None:
     parser = argparse.ArgumentParser(description="Batch Record Agent - process pharma batch record PDFs")
     parser.add_argument("--input", default="data", help="Input directory containing PDF files")
     parser.add_argument("--output", default="output", help="Output directory for results")
@@ -109,12 +118,16 @@ def main() -> None:
     failed = 0
     for pdf_path in pdf_files:
         try:
-            process_file(pdf_path, output_dir)
+            await process_file(pdf_path, output_dir)
         except Exception:
             logger.exception("Failed to process %s, skipping", pdf_path.name)
             failed += 1
 
     display_pipeline_done(len(pdf_files), failed)
+
+
+def main() -> None:
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

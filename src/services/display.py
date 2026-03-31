@@ -1,20 +1,157 @@
+from collections import defaultdict
+
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
+from rich.tree import Tree
 
-from ..config import TARGET_SECTIONS
 from ..models.document_models import DocumentSection
 from ..models.extraction_models import BatchRecordExtraction
-from ..models.finding_models import EvalResult
+from ..models.finding_models import EvalResult, Finding
 
 console = Console()
 
-SEVERITY_STYLES = {
-    "critical": ("bold red", "CRITICAL"),
-    "warning": ("yellow", "WARNING"),
-    "info": ("cyan", "INFO"),
+# Logical groupings of the 14 target sections
+SECTION_GROUPS: list[tuple[str, list[str]]] = [
+    ("Approvals & Personnel", ["approvals", "training_log"]),
+    ("Product & Reference Docs", ["product_details", "reference_docs"]),
+    ("Materials", ["bill_of_materials"]),
+    ("Equipment", ["processing_equipment"]),
+    ("Production Procedures", [
+        "area_clearance",
+        "production_procedure",
+        "post_production_sampling",
+        "yield_calculations",
+    ]),
+    ("Logs", ["production_comment_log", "exception_log"]),
+    ("Quality Review & Disposition", ["post_production_review", "qa_disposition"]),
+]
+
+SEVERITY_ICON = {
+    "critical": "[bold red]●[/]",
+    "warning":  "[bold yellow]▲[/]",
+    "info":     "[bold cyan]○[/]",
 }
+
+SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
+
+
+def _assessment_text(findings) -> tuple[str, str]:
+    is_template = any(f.finding_type == "likely_template_document" for f in findings)
+    if is_template:
+        return "BLANK TEMPLATE", "bold red"
+    if any(f.severity == "critical" for f in findings):
+        return "CRITICAL ISSUES", "bold red"
+    if any(f.severity == "warning" for f in findings):
+        return "WARNINGS PRESENT", "bold yellow"
+    return "LOOKS COMPLETE", "bold green"
+
+
+def _summary_panel(
+    extraction: BatchRecordExtraction,
+    eval_result: EvalResult,
+    sections: list[DocumentSection],
+) -> Panel:
+    meta = extraction.metadata
+    findings = eval_result.findings
+    critical = [f for f in findings if f.severity == "critical"]
+    warnings = [f for f in findings if f.severity == "warning"]
+    infos = [f for f in findings if f.severity == "info"]
+    page_range = max((s.end_page for s in sections), default=0)
+    assessment, assess_style = _assessment_text(findings)
+
+    t = Text()
+    t.append(f"  {meta.title or 'Unknown Title'}\n", style="bold white")
+    t.append("  Version ", style="dim")
+    t.append(f"{meta.version or 'N/A'}", style="white")
+    t.append("  |  Part ", style="dim")
+    t.append(f"{meta.part_number or 'N/A'}", style="white")
+    t.append("  |  Lot ", style="dim")
+    t.append(f"{meta.lot_number or 'N/A'}\n\n", style="white")
+    t.append(f"  Pages: ~{page_range}", style="dim")
+    t.append("  |  Sections: ", style="dim")
+    t.append(f"{len(sections)}/14", style="bold white")
+    t.append("  |  Steps: ", style="dim")
+    t.append(f"{len(extraction.procedure_steps)}", style="bold white")
+    t.append("  |  Materials: ", style="dim")
+    t.append(f"{len(extraction.materials)}\n\n", style="bold white")
+    t.append(f"  ● {len(critical)} Critical  ", style="bold red")
+    t.append(f"▲ {len(warnings)} Warning  ", style="bold yellow")
+    t.append(f"○ {len(infos)} Info\n\n", style="bold cyan")
+    t.append("  Assessment: ", style="dim")
+    t.append(assessment, style=assess_style)
+
+    return Panel(t, title="[bold]Batch Record Summary[/]", border_style="blue", padding=(0, 1))
+
+
+def _finding_label(f: Finding) -> str:
+    icon = SEVERITY_ICON.get(f.severity, "?")
+    msg = f.message[:80] + "…" if len(f.message) > 80 else f.message
+    return f"{icon} [dim]{f.finding_type}[/] — {msg}"
+
+
+def _build_section_tree(
+    findings: list[Finding],
+    sections: list[DocumentSection],
+) -> Tree:
+    found_names = {s.name for s in sections}
+
+    # Index findings by section_name
+    by_section: dict[str | None, list[Finding]] = defaultdict(list)
+    for f in findings:
+        by_section[f.section_name].append(f)
+
+    root = Tree("[bold]Section Identification[/]", guide_style="dim")
+
+    for group_label, section_keys in SECTION_GROUPS:
+        # Collect all findings that belong to any section in this group
+        group_findings: list[Finding] = []
+        for key in section_keys:
+            group_findings.extend(by_section.get(key, []))
+
+        # Determine group header style
+        if any(f.severity == "critical" for f in group_findings):
+            badge = f"[bold red][{len(group_findings)} finding(s)][/]"
+            label_style = "bold red"
+        elif any(f.severity == "warning" for f in group_findings):
+            badge = f"[bold yellow][{len(group_findings)} finding(s)][/]"
+            label_style = "bold yellow"
+        elif group_findings:
+            badge = f"[bold cyan][{len(group_findings)} finding(s)][/]"
+            label_style = "bold cyan"
+        else:
+            badge = ""
+            label_style = "bold"
+
+        group_node = root.add(f"[{label_style}]{group_label}[/]  {badge}")
+
+        for key in section_keys:
+            sec_findings = by_section.get(key, [])
+            if key not in found_names:
+                sec_node = group_node.add(f"[red]✗[/] [dim]{key}[/] [dim](not found)[/]")
+            elif not sec_findings:
+                group_node.add(f"[green]✓[/] [dim]{key}[/]")
+                continue
+            else:
+                worst = min(SEVERITY_ORDER.get(f.severity, 9) for f in sec_findings)
+                icon = "●" if worst == 0 else "▲"
+                icon_style = "bold red" if worst == 0 else "bold yellow"
+                sec_node = group_node.add(f"[{icon_style}]{icon}[/] [dim]{key}[/]")
+
+            if sec_findings:
+                for f in sorted(sec_findings, key=lambda x: SEVERITY_ORDER.get(x.severity, 9)):
+                    sec_node.add(_finding_label(f))
+
+    # Document-level findings (no section_name)
+    doc_findings = by_section.get(None, [])
+    if doc_findings:
+        worst = min(SEVERITY_ORDER.get(f.severity, 9) for f in doc_findings)
+        badge = f"[bold red][{len(doc_findings)}][/]" if worst == 0 else f"[bold yellow][{len(doc_findings)}][/]"
+        doc_node = root.add(f"[bold]Document-level[/]  {badge}")
+        for f in sorted(doc_findings, key=lambda x: SEVERITY_ORDER.get(x.severity, 9)):
+            doc_node.add(_finding_label(f))
+
+    return root
 
 
 def display_eval(
@@ -23,104 +160,14 @@ def display_eval(
     sections: list[DocumentSection],
 ) -> None:
     console.print()
-
-    # Header
-    console.print(Panel(
-        f"[bold white]Batch Record Eval:[/] [bold cyan]{eval_result.file_name}.pdf[/]",
-        style="bold blue",
-    ))
-
-    # Document identity
-    meta = extraction.metadata
-    doc_info = Text()
-    doc_info.append("  Title:   ", style="dim")
-    doc_info.append(f"{meta.title or 'N/A'}\n", style="bold white")
-    doc_info.append("  Version: ", style="dim")
-    doc_info.append(f"{meta.version or 'N/A'}", style="white")
-    doc_info.append("  |  Part: ", style="dim")
-    doc_info.append(f"{meta.part_number or 'N/A'}", style="white")
-    doc_info.append("  |  Lot: ", style="dim")
-    doc_info.append(f"{meta.lot_number or 'N/A'}", style="white")
-    doc_info.append("  |  Batch Size: ", style="dim")
-    doc_info.append(f"{meta.batch_size or 'N/A'}", style="white")
-    console.print(doc_info)
+    console.print(_summary_panel(extraction, eval_result, sections))
     console.print()
 
-    # Findings summary counts
-    critical = [f for f in eval_result.findings if f.severity == "critical"]
-    warnings = [f for f in eval_result.findings if f.severity == "warning"]
-    infos = [f for f in eval_result.findings if f.severity == "info"]
-
-    counts = Text()
-    counts.append("  ")
-    counts.append(f" {len(critical)} Critical ", style="bold red on dark_red")
-    counts.append("  ")
-    counts.append(f" {len(warnings)} Warning ", style="bold yellow on yellow4")
-    counts.append("  ")
-    counts.append(f" {len(infos)} Info ", style="bold cyan on dark_cyan")
-    console.print(Panel(counts, title="[bold]Findings Summary[/]", border_style="dim"))
-
-    # Findings table
-    if eval_result.findings:
-        table = Table(show_header=True, header_style="bold", border_style="dim", expand=True)
-        table.add_column("Severity", width=10, justify="center")
-        table.add_column("Type", width=24)
-        table.add_column("Section", width=20)
-        table.add_column("Message", ratio=1)
-
-        sorted_findings = sorted(
-            eval_result.findings,
-            key=lambda f: {"critical": 0, "warning": 1, "info": 2}.get(f.severity, 3),
-        )
-
-        for finding in sorted_findings:
-            style, label = SEVERITY_STYLES.get(finding.severity, ("white", finding.severity.upper()))
-            table.add_row(
-                Text(label, style=style),
-                finding.finding_type,
-                finding.section_name or "-",
-                finding.message,
-            )
-
-        console.print(table)
-    else:
-        console.print("  [bold green]No findings.[/]")
+    tree = _build_section_tree(eval_result.findings, sections)
+    console.print(Panel(tree, border_style="dim", padding=(0, 1)))
 
     console.print()
-
-    # Sections overview
-    found_names = {s.name for s in sections}
-    section_parts = []
-    for target in TARGET_SECTIONS:
-        if target in found_names:
-            section_parts.append(f"[bold green]\u2713[/bold green] {target}")
-        else:
-            section_parts.append(f"[bold red]\u2717[/bold red] {target}")
-    section_text = "  " + "  ".join(section_parts)
-    console.print(Panel(section_text, title="[bold]Sections[/bold]", border_style="dim"))
-
-    # Extraction stats
-    stats = Text()
-    stats.append("  Sections: ", style="dim")
-    stats.append(f"{len(sections)}/{len(TARGET_SECTIONS)}", style="bold white")
-    stats.append("  |  Procedure Steps: ", style="dim")
-    stats.append(str(len(extraction.procedure_steps)), style="bold white")
-    stats.append("  |  Materials: ", style="dim")
-    stats.append(str(len(extraction.materials)), style="bold white")
-    stats.append("  |  Equipment: ", style="dim")
-    stats.append(str(len(extraction.equipment)), style="bold white")
-    console.print(stats)
-
-    # Template assessment
-    is_template = any(f.finding_type == "likely_template_document" for f in eval_result.findings)
-    console.print()
-    if is_template:
-        console.print("  [bold red]Assessment:[/] This document appears to be a [bold]blank template[/], not a completed batch record.")
-    else:
-        console.print("  [bold green]Assessment:[/] This document appears to be a [bold]completed or partially completed[/] batch record.")
-
-    console.print()
-    console.print("[dim]\u2500" * 60 + "[/]")
+    console.print("[dim]" + "─" * 60 + "[/]")
     console.print()
 
 

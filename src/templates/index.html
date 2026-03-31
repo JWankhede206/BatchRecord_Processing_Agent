@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch Record Agent</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      background: #fafafa;
+      color: #1a1a1a;
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e5e5e5;
+      padding: 20px 0;
+      margin-bottom: 40px;
+    }
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a1a1a;
+      letter-spacing: -0.3px;
+    }
+    header span {
+      color: #999;
+      font-weight: 400;
+    }
+
+    /* Upload Zone */
+    .upload-zone {
+      border: 1.5px dashed #d0d0d0;
+      border-radius: 12px;
+      padding: 56px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: #fff;
+      margin-bottom: 40px;
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: #aaa;
+      background: #f5f5f5;
+    }
+    .upload-zone.drag-over {
+      border-color: #888;
+    }
+    .upload-icon {
+      font-size: 32px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+    .upload-zone p {
+      color: #888;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .upload-zone .browse {
+      color: #1a1a1a;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .upload-zone .file-name {
+      color: #1a1a1a;
+      font-size: 13px;
+      margin-top: 12px;
+      display: none;
+    }
+    #file-input { display: none; }
+
+    /* Processing */
+    .processing {
+      display: none;
+      text-align: center;
+      padding: 60px 0;
+    }
+    .processing.active { display: block; }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 2.5px solid #e0e0e0;
+      border-top-color: #888;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .processing p {
+      color: #555;
+      font-size: 14px;
+    }
+    .processing .step {
+      color: #999;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    /* Error */
+    .error-box {
+      display: none;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      color: #dc2626;
+      font-size: 14px;
+    }
+    .error-box.active { display: block; }
+
+    /* Results */
+    .results {
+      display: none;
+      padding-bottom: 80px;
+    }
+    .results.active { display: block; animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Cards */
+    .card {
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #999;
+      margin-bottom: 14px;
+    }
+
+    /* Document Identity */
+    .doc-header {
+      margin-bottom: 24px;
+    }
+    .doc-header h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #1a1a1a;
+      margin-bottom: 4px;
+    }
+    .doc-header .subtitle {
+      font-size: 13px;
+      color: #999;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .meta-item label {
+      display: block;
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+    .meta-item span {
+      font-size: 14px;
+      color: #333;
+    }
+    .meta-item span.empty {
+      color: #ccc;
+      font-style: italic;
+    }
+
+    /* Summary Counts */
+    .counts {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .count-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .count-badge .num {
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .count-badge.critical { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; }
+    .count-badge.warning  { background: #fffbeb; border: 1px solid #fde68a; color: #d97706; }
+    .count-badge.info     { background: #ecfeff; border: 1px solid #a5f3fc; color: #0891b2; }
+
+    /* Assessment */
+    .assessment {
+      font-size: 14px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .assessment.template {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #dc2626;
+    }
+    .assessment.completed {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: #16a34a;
+    }
+
+    /* Findings Table */
+    .findings-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .findings-table th {
+      text-align: left;
+      padding: 10px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #999;
+      border-bottom: 1px solid #e5e5e5;
+    }
+    .findings-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f0f0f0;
+      color: #555;
+      vertical-align: top;
+    }
+    .findings-table tr:last-child td { border-bottom: none; }
+    .findings-table tbody tr:hover { background: #fafafa; }
+    .severity-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      position: relative;
+      top: -1px;
+    }
+    .severity-dot.critical { background: #dc2626; }
+    .severity-dot.warning  { background: #d97706; }
+    .severity-dot.info     { background: #0891b2; }
+    .severity-label { font-weight: 500; }
+    .severity-label.critical { color: #dc2626; }
+    .severity-label.warning  { color: #d97706; }
+    .severity-label.info     { color: #0891b2; }
+    .finding-type {
+      font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      color: #888;
+    }
+
+    /* Section Groups */
+    .section-group {
+      border: 1px solid #e5e5e5;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .section-group-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      cursor: pointer;
+      background: #fafafa;
+      user-select: none;
+      gap: 10px;
+    }
+    .section-group-header:hover { background: #f3f3f3; }
+    .section-group-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a1a1a;
+      flex: 1;
+    }
+    .group-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .group-badge.critical { background: #fef2f2; color: #dc2626; }
+    .group-badge.warning  { background: #fffbeb; color: #d97706; }
+    .group-badge.info     { background: #ecfeff; color: #0891b2; }
+    .group-badge.clean    { background: #f0fdf4; color: #16a34a; }
+    .group-chevron {
+      font-size: 11px;
+      color: #aaa;
+      transition: transform 0.2s;
+    }
+    .section-group.open .group-chevron { transform: rotate(90deg); }
+    .section-group-body {
+      display: none;
+      padding: 4px 0 8px 0;
+      border-top: 1px solid #f0f0f0;
+    }
+    .section-group.open .section-group-body { display: block; }
+
+    .section-row {
+      padding: 7px 14px 7px 28px;
+    }
+    .section-row-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .section-check { color: #16a34a; font-weight: bold; font-size: 14px; }
+    .section-cross { color: #ccc; font-size: 14px; }
+    .section-warn  { color: #d97706; font-size: 14px; }
+    .section-crit  { color: #dc2626; font-size: 14px; }
+    .section-name.found   { color: #333; }
+    .section-name.missing { color: #bbb; }
+    .section-findings {
+      margin-top: 5px;
+      padding-left: 22px;
+    }
+    .section-finding-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: #555;
+      padding: 3px 0;
+      border-bottom: 1px solid #f5f5f5;
+    }
+    .section-finding-item:last-child { border-bottom: none; }
+    .finding-sev-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 4px;
+    }
+    .finding-sev-dot.critical { background: #dc2626; }
+    .finding-sev-dot.warning  { background: #d97706; }
+    .finding-sev-dot.info     { background: #0891b2; }
+    .finding-type-small {
+      font-family: 'SF Mono', SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: #aaa;
+      white-space: nowrap;
+    }
+
+    /* Stats Row */
+    .stats-row {
+      display: flex;
+      gap: 32px;
+      flex-wrap: wrap;
+    }
+    .stat {
+      text-align: center;
+    }
+    .stat .num {
+      font-size: 28px;
+      font-weight: 700;
+      color: #1a1a1a;
+      display: block;
+    }
+    .stat .label {
+      font-size: 11px;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Upload Another */
+    .upload-another {
+      display: inline-block;
+      margin-top: 24px;
+      padding: 10px 24px;
+      border: 1px solid #d0d0d0;
+      border-radius: 8px;
+      color: #555;
+      font-size: 13px;
+      cursor: pointer;
+      background: #fff;
+      transition: all 0.15s ease;
+    }
+    .upload-another:hover {
+      border-color: #aaa;
+      color: #1a1a1a;
+      background: #f5f5f5;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>Batch Record Agent <span>/ Eval Dashboard</span></h1>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Upload -->
+    <div class="upload-zone" id="upload-zone">
+      <div class="upload-icon">&#8593;</div>
+      <p>Drop a batch record PDF here or <span class="browse">browse</span></p>
+      <p style="font-size:12px; color:#444">PDF files only</p>
+      <div class="file-name" id="file-name"></div>
+      <input type="file" id="file-input" accept=".pdf">
+    </div>
+
+    <!-- Processing -->
+    <div class="processing" id="processing">
+      <div class="spinner"></div>
+      <p>Processing batch record</p>
+      <div class="step" id="step-text">Extracting text and analyzing sections...</div>
+    </div>
+
+    <!-- Error -->
+    <div class="error-box" id="error-box"></div>
+
+    <!-- Results -->
+    <div class="results" id="results">
+      <div class="doc-header" id="doc-header"></div>
+
+      <div class="assessment" id="assessment"></div>
+
+      <div class="counts" id="counts"></div>
+
+      <div class="card">
+        <div class="card-title">Findings</div>
+        <table class="findings-table">
+          <thead>
+            <tr>
+              <th style="width:110px">Severity</th>
+              <th style="width:180px">Type</th>
+              <th style="width:160px">Section</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody id="findings-body"></tbody>
+        </table>
+        <div id="no-findings" style="display:none; padding:20px 0; text-align:center; color:#999; font-size:14px;">No findings</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Section Identification</div>
+        <div id="sections-groups"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Extraction Stats</div>
+        <div class="stats-row" id="stats-row"></div>
+      </div>
+
+      <button class="upload-another" id="upload-another">Upload Another</button>
+    </div>
+  </main>
+
+  <script>
+    const uploadZone = document.getElementById('upload-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileNameEl = document.getElementById('file-name');
+    const processing = document.getElementById('processing');
+    const stepText = document.getElementById('step-text');
+    const errorBox = document.getElementById('error-box');
+    const results = document.getElementById('results');
+
+    const steps = [
+      'Parsing PDF and extracting text...',
+      'Identifying document sections...',
+      'Extracting metadata and fields...',
+      'Extracting procedure steps...',
+      'Running completeness checks...',
+      'Almost done...',
+    ];
+
+    // Upload zone events
+    uploadZone.addEventListener('click', () => fileInput.click());
+
+    uploadZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadZone.classList.add('drag-over');
+    });
+
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.classList.remove('drag-over');
+    });
+
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.toLowerCase().endsWith('.pdf')) {
+        processFile(file);
+      }
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) processFile(fileInput.files[0]);
+    });
+
+    document.getElementById('upload-another').addEventListener('click', resetUI);
+
+    function resetUI() {
+      uploadZone.style.display = '';
+      processing.classList.remove('active');
+      results.classList.remove('active');
+      errorBox.classList.remove('active');
+      fileInput.value = '';
+      fileNameEl.style.display = 'none';
+    }
+
+    async function processFile(file) {
+      // Show processing
+      uploadZone.style.display = 'none';
+      results.classList.remove('active');
+      errorBox.classList.remove('active');
+      processing.classList.add('active');
+
+      // Cycle through step messages
+      let stepIdx = 0;
+      stepText.textContent = steps[0];
+      const stepInterval = setInterval(() => {
+        stepIdx++;
+        if (stepIdx < steps.length) {
+          stepText.textContent = steps[stepIdx];
+        }
+      }, 8000);
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const res = await fetch('/api/process', {
+          method: 'POST',
+          body: formData,
+        });
+
+        clearInterval(stepInterval);
+        processing.classList.remove('active');
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Processing failed');
+        }
+
+        const data = await res.json();
+        renderResults(data);
+      } catch (e) {
+        clearInterval(stepInterval);
+        processing.classList.remove('active');
+        errorBox.textContent = e.message;
+        errorBox.classList.add('active');
+        uploadZone.style.display = '';
+      }
+    }
+
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function renderResults(data) {
+      // Document header
+      const meta = data.metadata;
+      const title = meta.title || data.file_name;
+      document.getElementById('doc-header').innerHTML = `
+        <h2>${esc(title)}</h2>
+        <div class="subtitle">${esc(data.file_name)}.pdf</div>
+        <div class="meta-grid" style="margin-top:16px">
+          ${metaItem('Version', meta.version)}
+          ${metaItem('Lot Number', meta.lot_number)}
+          ${metaItem('Part Number', meta.part_number)}
+          ${metaItem('Batch Size', meta.batch_size)}
+        </div>
+      `;
+
+      // Assessment
+      const assess = document.getElementById('assessment');
+      if (data.is_template) {
+        assess.className = 'assessment template';
+        assess.textContent = 'This document appears to be a blank template, not a completed batch record.';
+      } else {
+        assess.className = 'assessment completed';
+        assess.textContent = 'This document appears to be a completed or partially completed batch record.';
+      }
+
+      // Counts
+      const c = data.summary_counts;
+      document.getElementById('counts').innerHTML = `
+        <div class="count-badge critical"><span class="num">${c.critical}</span> Critical</div>
+        <div class="count-badge warning"><span class="num">${c.warning}</span> Warning</div>
+        <div class="count-badge info"><span class="num">${c.info}</span> Info</div>
+      `;
+
+      // Findings table
+      const tbody = document.getElementById('findings-body');
+      const noFindings = document.getElementById('no-findings');
+      const sorted = [...data.findings].sort((a, b) => {
+        const order = { critical: 0, warning: 1, info: 2 };
+        return (order[a.severity] ?? 3) - (order[b.severity] ?? 3);
+      });
+
+      if (sorted.length === 0) {
+        tbody.innerHTML = '';
+        noFindings.style.display = '';
+      } else {
+        noFindings.style.display = 'none';
+        tbody.innerHTML = sorted.map(f => `
+          <tr>
+            <td>
+              <span class="severity-dot ${f.severity}"></span>
+              <span class="severity-label ${f.severity}">${f.severity.charAt(0).toUpperCase() + f.severity.slice(1)}</span>
+            </td>
+            <td><span class="finding-type">${esc(f.finding_type)}</span></td>
+            <td>${f.section_name ? esc(f.section_name) : '<span style="color:#333">&mdash;</span>'}</td>
+            <td>${esc(f.message)}</td>
+          </tr>
+        `).join('');
+      }
+
+      // Section groups
+      const SECTION_GROUPS = [
+        { label: 'Approvals & Personnel',        keys: ['approvals', 'training_log'] },
+        { label: 'Product & Reference Docs',     keys: ['product_details', 'reference_docs'] },
+        { label: 'Materials',                    keys: ['bill_of_materials'] },
+        { label: 'Equipment',                    keys: ['processing_equipment'] },
+        { label: 'Production Procedures',        keys: ['area_clearance', 'production_procedure', 'post_production_sampling', 'yield_calculations'] },
+        { label: 'Logs',                         keys: ['production_comment_log', 'exception_log'] },
+        { label: 'Quality Review & Disposition', keys: ['post_production_review', 'qa_disposition'] },
+      ];
+
+      const foundSet = new Set(data.sections_found);
+      const ORDER = { critical: 0, warning: 1, info: 2 };
+
+      // Index findings by section_name
+      const findingsBySection = {};
+      for (const f of data.findings) {
+        const key = f.section_name || '__doc__';
+        if (!findingsBySection[key]) findingsBySection[key] = [];
+        findingsBySection[key].push(f);
+      }
+
+      function worstSev(findings) {
+        if (!findings || findings.length === 0) return null;
+        return findings.reduce((best, f) => (ORDER[f.severity] < ORDER[best] ? f.severity : best), findings[0].severity);
+      }
+
+      const groupsHtml = SECTION_GROUPS.map((group, idx) => {
+        // Collect all findings for this group
+        const groupFindings = group.keys.flatMap(k => findingsBySection[k] || []);
+        const worst = worstSev(groupFindings);
+        const badgeClass = worst || 'clean';
+        const badgeText = worst
+          ? `${groupFindings.length} finding${groupFindings.length !== 1 ? 's' : ''}`
+          : 'All clear';
+
+        const sectionsHtml = group.keys.map(key => {
+          const isFound = foundSet.has(key);
+          const secFindings = findingsBySection[key] || [];
+          const secWorst = worstSev(secFindings);
+
+          let icon, iconClass;
+          if (!isFound) { icon = '✗'; iconClass = 'section-cross'; }
+          else if (secWorst === 'critical') { icon = '●'; iconClass = 'section-crit'; }
+          else if (secWorst === 'warning')  { icon = '▲'; iconClass = 'section-warn'; }
+          else { icon = '✓'; iconClass = 'section-check'; }
+
+          const findingsHtml = secFindings.length ? `
+            <div class="section-findings">
+              ${secFindings
+                .sort((a,b) => (ORDER[a.severity]??9) - (ORDER[b.severity]??9))
+                .map(f => `
+                  <div class="section-finding-item">
+                    <span class="finding-sev-dot ${f.severity}"></span>
+                    <span class="finding-type-small">${esc(f.finding_type)}</span>
+                    <span>${esc(f.message)}</span>
+                  </div>
+                `).join('')}
+            </div>` : '';
+
+          return `
+            <div class="section-row">
+              <div class="section-row-header">
+                <span class="${iconClass}">${icon}</span>
+                <span class="section-name ${isFound ? 'found' : 'missing'}">${esc(key)}</span>
+              </div>
+              ${findingsHtml}
+            </div>`;
+        }).join('');
+
+        // Auto-open groups with findings
+        const openClass = groupFindings.length > 0 ? ' open' : '';
+
+        return `
+          <div class="section-group${openClass}" id="sg-${idx}">
+            <div class="section-group-header" onclick="toggleGroup('sg-${idx}')">
+              <span class="section-group-title">${group.label}</span>
+              <span class="group-badge ${badgeClass}">${badgeText}</span>
+              <span class="group-chevron">&#9654;</span>
+            </div>
+            <div class="section-group-body">${sectionsHtml}</div>
+          </div>`;
+      }).join('');
+
+      document.getElementById('sections-groups').innerHTML = groupsHtml;
+
+      // Stats
+      const st = data.extraction_stats;
+      document.getElementById('stats-row').innerHTML = `
+        ${statBlock(st.sections + '/' + st.target_sections, 'Sections')}
+        ${statBlock(st.procedure_steps, 'Procedure Steps')}
+        ${statBlock(st.materials, 'Materials')}
+        ${statBlock(st.equipment, 'Equipment')}
+      `;
+
+      results.classList.add('active');
+    }
+
+    function toggleGroup(id) {
+      document.getElementById(id).classList.toggle('open');
+    }
+
+    function metaItem(label, value) {
+      return `<div class="meta-item"><label>${label}</label><span class="${value ? '' : 'empty'}">${value ? esc(value) : 'N/A'}</span></div>`;
+    }
+
+    function statBlock(num, label) {
+      return `<div class="stat"><span class="num">${num}</span><span class="label">${label}</span></div>`;
+    }
+  </script>
+</body>
+</html>

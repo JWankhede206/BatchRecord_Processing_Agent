@@ -1,6 +1,6 @@
 from ..models.document_models import ParsedDocument
 from ..models.extraction_models import ProcedureStep
-from ..openai_client import chat_json
+from ..openai_client import achat_json, achat_json_vision, chat_json
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,16 +21,31 @@ Return a JSON object with a key "steps" containing an array of step objects. Eac
 Extract ALL numbered processing steps. Include sub-steps as part of their parent step's instruction_text."""
 
 
+def _build_prompt(parsed_doc: ParsedDocument) -> tuple[str, list[str]]:
+    page_texts = [
+        f"--- PAGE {p.page_number} ---\n{p.enriched_text or p.text}"
+        for p in parsed_doc.pages
+    ]
+    full_text = "\n\n".join(page_texts)
+    images = [p.image_b64 for p in parsed_doc.pages if p.image_b64]
+    return full_text, images
+
+
+def _parse_result(result: dict, file_name: str) -> list[ProcedureStep]:
+    steps = [ProcedureStep(**s) for s in result.get("steps", [])]
+    logger.info("Extracted %d procedure steps from %s", len(steps), file_name)
+    return steps
+
+
 def extract_procedure(parsed_doc: ParsedDocument) -> list[ProcedureStep]:
     logger.info("Extracting procedure steps from %s", parsed_doc.file_name)
-
-    page_texts = []
-    for page in parsed_doc.pages:
-        page_texts.append(f"--- PAGE {page.page_number} ---\n{page.text}")
-    full_text = "\n\n".join(page_texts)
-
+    full_text, _ = _build_prompt(parsed_doc)
     result = chat_json(SYSTEM_PROMPT, full_text)
+    return _parse_result(result, parsed_doc.file_name)
 
-    steps = [ProcedureStep(**s) for s in result.get("steps", [])]
-    logger.info("Extracted %d procedure steps from %s", len(steps), parsed_doc.file_name)
-    return steps
+
+async def aextract_procedure(parsed_doc: ParsedDocument) -> list[ProcedureStep]:
+    logger.info("Extracting procedure steps from %s (async+vision)", parsed_doc.file_name)
+    full_text, images = _build_prompt(parsed_doc)
+    result = await achat_json_vision(SYSTEM_PROMPT, full_text, images)
+    return _parse_result(result, parsed_doc.file_name)
